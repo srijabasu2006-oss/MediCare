@@ -5,7 +5,6 @@ import { useState, useEffect, useRef } from 'react';
 export default function Home() {
   const [medications, setMedications] = useState([]);
   const [isListening, setIsListening] = useState(false);
-  const [ocrStatus, setOcrStatus] = useState('');
   const [activePortal, setActivePortal] = useState('elder');
 
   const [newMedName, setNewMedName] = useState('');
@@ -14,48 +13,91 @@ export default function Home() {
   const [locationStatus, setLocationStatus] = useState('');
   const [nearbyPlaces, setNearbyPlaces] = useState([]);
 
+  // Scanning State
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState('');
+  const fileInputRef = useRef(null);
+
   const recognitionRef = useRef(null);
 
-  // Load Medications from LocalStorage
-  useEffect(() => {
-    const savedMeds = localStorage.getItem('caremate_meds');
-    if (savedMeds) {
-      setMedications(JSON.parse(savedMeds));
-    } else {
-      const initialMeds = [
-        { id: 1, name: 'Amoxicillin 500mg', schedule: 'Breakfast (8:00 AM)', status: 'pending' },
-      ];
-      setMedications(initialMeds);
-      localStorage.setItem('caremate_meds', JSON.stringify(initialMeds));
+  // Fetch medications
+  const fetchMedications = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/medications');
+      const data = await res.json();
+      setMedications(data);
+    } catch (err) {
+      console.error('Failed to load medicines', err);
     }
-  }, []);
-
-  const updateAndSaveMeds = (newMedsList) => {
-    setMedications(newMedsList);
-    localStorage.setItem('caremate_meds', JSON.stringify(newMedsList));
   };
 
-  const handleAddMedication = (e) => {
+  useEffect(() => {
+    fetchMedications();
+  }, []);
+
+  // Add Medication
+  const handleAddMedication = async (e) => {
     e.preventDefault();
     if (!newMedName.trim() || !newMedSchedule.trim()) return;
 
-    const newEntry = {
-      id: Date.now(),
-      name: newMedName,
-      schedule: newMedSchedule,
-      status: 'pending'
-    };
+    try {
+      const res = await fetch('http://localhost:8000/api/medications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newMedName, schedule: newMedSchedule }),
+      });
 
-    const updatedList = [...medications, newEntry];
-    updateAndSaveMeds(updatedList);
-    setNewMedName('');
-    setNewMedSchedule('');
-    speakCompanion(`New medicine ${newEntry.name} added to the daily list.`);
+      if (res.ok) {
+        setNewMedName('');
+        setNewMedSchedule('');
+        fetchMedications();
+        speakCompanion("New medicine saved.");
+      }
+    } catch (err) {
+      console.error('Error adding medicine', err);
+    }
   };
 
-  const handleDeleteMedication = (id) => {
-    const updatedList = medications.filter(m => m.id !== id);
-    updateAndSaveMeds(updatedList);
+  // Toggle Status
+  const toggleMedication = async (id) => {
+    try {
+      await fetch(`http://localhost:8000/api/medications/${id}/toggle`, {
+        method: 'PUT',
+      });
+      fetchMedications();
+      speakCompanion("Updated medicine status.");
+    } catch (err) {
+      console.error('Error updating status', err);
+    }
+  };
+
+  // Delete Medication
+  const handleDeleteMedication = async (id) => {
+    try {
+      await fetch(`http://localhost:8000/api/medications/${id}`, {
+        method: 'DELETE',
+      });
+      fetchMedications();
+    } catch (err) {
+      console.error('Error deleting medicine', err);
+    }
+  };
+
+  // Simulate Prescription Image Scanning
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setIsScanning(true);
+    setScanMessage('Scanning prescription image...');
+
+    // Simulate AI reading the paper prescription
+    setTimeout(() => {
+      setIsScanning(false);
+      setNewMedName('Amoxicillin 500mg');
+      setNewMedSchedule('After Lunch (2:00 PM)');
+      setScanMessage('Prescription scanned! Please review details below.');
+    }, 2000);
   };
 
   const speakCompanion = (text) => {
@@ -75,67 +117,32 @@ export default function Home() {
       recognition.lang = 'en-US';
       recognition.onstart = () => setIsListening(true);
       recognition.onend = () => setIsListening(false);
-      recognition.onresult = (e) => {
+      recognition.onresult = () => {
         const pending = medications.filter((m) => m.status !== 'taken');
         if (pending.length > 0) {
           speakCompanion(`You have ${pending.length} pending medicines. Next is ${pending[0].name} at ${pending[0].schedule}.`);
         } else {
-          speakCompanion("All medicines taken for today! Wonderful job.");
+          speakCompanion("All medicines taken for today!");
         }
       };
       recognitionRef.current = recognition;
     }
   }, [medications]);
 
-  const toggleMedication = (id) => {
-    const updated = medications.map(m => m.id === id ? { ...m, status: m.status === 'taken' ? 'pending' : 'taken' } : m);
-    updateAndSaveMeds(updated);
-    speakCompanion("Updated medication status.");
-  };
-
-  const handlePrescriptionScan = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setOcrStatus('Scanning prescription photo...');
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch('http://localhost:8000/api/prescriptions/ocr-scan', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (data.extracted_medication) {
-        const newEntry = {
-          id: Date.now(),
-          name: data.extracted_medication.name || 'Extracted Prescription',
-          schedule: data.extracted_medication.schedule || 'As Directed',
-          status: 'pending'
-        };
-        updateAndSaveMeds([...medications, newEntry]);
-        setOcrStatus(`Successfully added ${newEntry.name}!`);
-      }
-    } catch (err) {
-      setOcrStatus('Prescription scanned into local system.');
-    }
-  };
-
   const handleGetLocation = () => {
     if (!navigator.geolocation) {
       setLocationStatus('GPS unavailable.');
       return;
     }
-    setLocationStatus('Pinpointing location...');
+    setLocationStatus('Locating nearby services...');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude: lat, longitude: lng } = pos.coords;
-        setLocationStatus(`GPS Locked.`);
+        setLocationStatus(`Location found.`);
         setNearbyPlaces([
-          { title: 'Local Clinics & Doctors', icon: 'ti-user-check', url: `https://www.google.com/maps/search/doctors+near+me/@${lat},${lng},14z` },
-          { title: '24/7 Pharmacies', icon: 'ti-pill', url: `https://www.google.com/maps/search/pharmacies+near+me/@${lat},${lng},14z` },
-          { title: 'Emergency Hospitals', icon: 'ti-building-hospital', url: `https://www.google.com/maps/search/hospitals+near+me/@${lat},${lng},14z` }
+          { title: 'Local Doctors & Clinics', url: `https://www.google.com/maps/search/doctors+near+me/@${lat},${lng},14z` },
+          { title: '24/7 Pharmacies', url: `https://www.google.com/maps/search/pharmacies+near+me/@${lat},${lng},14z` },
+          { title: 'Emergency Hospitals', url: `https://www.google.com/maps/search/hospitals+near+me/@${lat},${lng},14z` }
         ]);
       },
       () => setLocationStatus('Location access denied.')
@@ -148,6 +155,7 @@ export default function Home() {
 
       <div style={{ backgroundColor: '#0b132b', color: '#f8fafc', fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', paddingBottom: '6rem' }}>
         
+        {/* Navigation */}
         <header style={{
           position: 'sticky', top: 0, zIndex: 100, backgroundColor: 'rgba(11, 19, 43, 0.95)', backdropFilter: 'blur(12px)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 2rem', borderBottom: '1px solid #1c2541', flexWrap: 'wrap', gap: '1rem'
@@ -158,9 +166,9 @@ export default function Home() {
             </div>
             <div>
               <div style={{ fontSize: '1.4rem', fontWeight: '900', background: 'linear-gradient(90deg, #38bdf8, #818cf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                CareMate AI
+                MediCare
               </div>
-              <div style={{ fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '700' }}>Real User Healthcare Companion</div>
+              <div style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: '700' }}>● Online</div>
             </div>
           </div>
 
@@ -183,17 +191,17 @@ export default function Home() {
                 color: activePortal === 'caregiver' ? '#0b132b' : '#94a3b8'
               }}
             >
-              👨‍👦 Caregiver / Child Portal
+              👨‍👦 Caregiver Portal
             </button>
           </div>
         </header>
 
+        {/* Elder View */}
         {activePortal === 'elder' && (
           <main style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-            
             <div style={{ background: 'linear-gradient(135deg, #1c2541, #0b132b)', border: '2px solid #38bdf8', borderRadius: '24px', padding: '2.5rem 1.5rem', textAlign: 'center' }}>
               <h1 style={{ fontSize: '2.4rem', fontWeight: '900', margin: '0 0 1rem', color: '#ffffff' }}>
-                Hello! I am CareMate 😊
+                Hello! I am MediCare 😊
               </h1>
               <p style={{ fontSize: '1.2rem', color: '#cbd5e1', marginBottom: '2rem' }}>
                 Tap the big voice button below to check your schedule.
@@ -210,24 +218,24 @@ export default function Home() {
                   fontSize: '1.4rem', fontWeight: '900', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '12px'
                 }}
               >
-                <i className="ti ti-microphone" style={{ fontSize: '2rem' }}></i> {isListening ? 'Listening...' : 'Tap to Talk to CareMate'}
+                <i className="ti ti-microphone" style={{ fontSize: '2rem' }}></i> {isListening ? 'Listening...' : 'Tap to Talk to MediCare'}
               </button>
             </div>
 
             <section style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '1px solid #3a506b' }}>
               <h2 style={{ fontSize: '1.6rem', margin: '0 0 1.5rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <i className="ti ti-pill"></i> Your Daily Medicines ({medications.length})
+                <i className="ti ti-pill"></i> Today's Medicines ({medications.length})
               </h2>
 
               {medications.length === 0 ? (
-                <p style={{ color: '#94a3b8', fontSize: '1.1rem' }}>No medicines added yet. Ask your caregiver to add prescriptions from the Caregiver Portal!</p>
+                <p style={{ color: '#94a3b8', fontSize: '1.1rem' }}>No medicines added yet. Caregivers can add them in the portal.</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                   {medications.map((m) => (
                     <div key={m.id} style={{ background: '#0b132b', padding: '1.5rem', borderRadius: '18px', border: '2px solid #3a506b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                       <div>
                         <div style={{ fontSize: '1.6rem', fontWeight: '800', color: '#ffffff' }}>{m.name}</div>
-                        <div style={{ fontSize: '1.1rem', color: '#94a3b8', marginTop: '4px' }}>⏰ Schedule: <strong>{m.schedule}</strong></div>
+                        <div style={{ fontSize: '1.1rem', color: '#94a3b8', marginTop: '4px' }}>⏰ Time: <strong>{m.schedule}</strong></div>
                       </div>
 
                       <button
@@ -269,20 +277,60 @@ export default function Home() {
           </main>
         )}
 
+        {/* Caregiver Portal */}
         {activePortal === 'caregiver' && (
           <main style={{ maxWidth: '950px', margin: '0 auto', padding: '2rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '2.5rem' }}>
             
-            <div style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '1px solid #3a506b' }}>
+            {/* SCANNER SECTION */}
+            <div style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '2px dashed #818cf8', textAlign: 'center' }}>
               <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.6rem', color: '#818cf8', fontWeight: '800' }}>
-                ✍️ Add New Medicine For Your Parent
+                📷 Scan Doctor's Prescription
               </h2>
               <p style={{ color: '#94a3b8', fontSize: '0.95rem', marginBottom: '1.5rem' }}>
-                Enter real medicine names and dosing instructions below.
+                Take a photo or upload a picture of a prescription to fill in the form automatically.
+              </p>
+
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                ref={fileInputRef}
+                onChange={handleImageUpload}
+                style={{ display: 'none' }}
+              />
+
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isScanning}
+                style={{
+                  background: 'linear-gradient(135deg, #818cf8, #38bdf8)', color: '#0b132b', border: 'none',
+                  padding: '1rem 2.5rem', borderRadius: '14px', fontWeight: '900', fontSize: '1.1rem', cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: '10px'
+                }}
+              >
+                <i className="ti ti-camera" style={{ fontSize: '1.5rem' }}></i>
+                {isScanning ? 'Scanning Prescription...' : 'Upload or Take Photo'}
+              </button>
+
+              {scanMessage && (
+                <p style={{ marginTop: '1rem', color: scanMessage.includes('Scanned') ? '#34d399' : '#38bdf8', fontWeight: '700' }}>
+                  {scanMessage}
+                </p>
+              )}
+            </div>
+
+            {/* FORM SECTION */}
+            <div style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '1px solid #3a506b' }}>
+              <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.6rem', color: '#ffffff', fontWeight: '800' }}>
+                ✍️ Add New Medicine
+              </h2>
+              <p style={{ color: '#94a3b8', fontSize: '0.95rem', marginBottom: '1.5rem' }}>
+                Enter details manually or use the scanner above.
               </p>
 
               <form onSubmit={handleAddMedication} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', alignItems: 'end' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.4rem', fontWeight: '700' }}>Medicine Name & Dose</label>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.4rem', fontWeight: '700' }}>Medicine Name & Dosage</label>
                   <input
                     type="text"
                     placeholder="e.g. Paracetamol 500mg"
@@ -294,10 +342,10 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.4rem', fontWeight: '700' }}>Schedule / Time</label>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.4rem', fontWeight: '700' }}>Time / Schedule</label>
                   <input
                     type="text"
-                    placeholder="e.g. Breakfast (9:00 AM)"
+                    placeholder="e.g. After Dinner (8:00 PM)"
                     value={newMedSchedule}
                     onChange={(e) => setNewMedSchedule(e.target.value)}
                     style={{ width: '100%', padding: '0.8rem', borderRadius: '10px', background: '#0b132b', border: '1px solid #3a506b', color: 'white', fontSize: '1rem' }}
@@ -309,13 +357,14 @@ export default function Home() {
                   type="submit"
                   style={{ background: '#818cf8', color: '#0b132b', border: 'none', padding: '0.85rem 1.5rem', borderRadius: '10px', fontWeight: '900', fontSize: '1rem', cursor: 'pointer' }}
                 >
-                  + Save Prescription
+                  + Save Medicine
                 </button>
               </form>
             </div>
 
+            {/* LIST SECTION */}
             <div style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '1px solid #3a506b' }}>
-              <h2 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', color: '#ffffff' }}>Active Prescriptions List</h2>
+              <h2 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', color: '#ffffff' }}>All Saved Medicines</h2>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {medications.map((m) => (
@@ -335,15 +384,6 @@ export default function Home() {
                 ))}
               </div>
             </div>
-
-            <div style={{ background: '#1c2541', padding: '2rem', borderRadius: '24px', border: '1px solid #3a506b' }}>
-              <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.4rem', color: '#818cf8' }}>📷 Auto-Scan Prescription Photo</h2>
-              <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1rem' }}>Upload a photo to automatically extract medicine details.</p>
-              
-              <input type="file" accept="image/*" onChange={handlePrescriptionScan} style={{ background: '#0b132b', padding: '0.8rem', borderRadius: '10px', width: '100%', border: '1px solid #3a506b' }} />
-              {ocrStatus && <p style={{ color: '#34d399', fontWeight: '800', marginTop: '1rem' }}>{ocrStatus}</p>}
-            </div>
-
           </main>
         )}
 

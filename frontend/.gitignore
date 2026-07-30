@@ -1,0 +1,16 @@
+# Node dependencies
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Python dependencies & cache
+backend/__pycache__/
+*.pyc
+*.sqlite3
+backend/medicare.db
+.venv/
+env/
+
+# Environment variables
+.env
+.env.local
