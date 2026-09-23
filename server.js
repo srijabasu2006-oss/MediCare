@@ -1,77 +1,90 @@
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-require('dotenv').config();
+'use client';
 
-// 1. Correct Import for the brand-new @google/genai SDK
-const { GoogleGenAI } = require('@google/genai');
+import { useState, useEffect } from 'react';
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+export default function Home() {
+  const [activePortal, setActivePortal] = useState('elder');
+  const [medications, setMedications] = useState([]);
 
-// 2. Correct Initialization matching the new SDK syntax
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "MOCK_KEY" });
-
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Serve all static files (HTML, CSS, JS) directly from the public folder
-app.use(express.static(path.join(__dirname, 'public')));
-
-// In-memory array data store for your medicines
-let medicineInventoryStore = [];
-
-// API Route: Add medicine to local store
-app.post('/api/medicines', (req, res) => {
-  const { name, category, count, timings, notes } = req.body;
-  if (!name || !count) {
-    return res.status(400).json({ error: 'Missing core properties.' });
-  }
-  const identityRecord = {
-    id: medicineInventoryStore.length + 1,
-    name, category, count, timings: timings || [], notes
+  // Fetch medications directly from Python/SQL backend
+  const fetchMedications = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/medications');
+      if (res.ok) {
+        const data = await res.json();
+        setMedications(data);
+      }
+    } catch (err) {
+      console.error('API Error:', err);
+    }
   };
-  medicineInventoryStore.push(identityRecord);
-  res.status(201).json({ success: true, record: identityRecord });
-});
 
-// API Route: Get all medicines
-app.get('/api/medicines', (req, res) => {
-  res.json(medicineInventoryStore);
-});
+  useEffect(() => {
+    fetchMedications();
+  }, []);
 
-// FIXED AI ROUTE: Using the clean, new SDK syntax
-app.post('/api/ai-advice', async (req, res) => {
-  const { medicineName, notes } = req.body;
+  return (
+    <div style={{ backgroundColor: '#0B1B3D', color: '#FFFFFF', minHeight: '100vh', padding: '2rem', fontFamily: 'sans-serif' }}>
+      
+      {/* HEADER SWITCH */}
+      <header style={{ display: 'flex', gap: '10px', marginBottom: '2rem' }}>
+        <button
+          onClick={() => setActivePortal('elder')}
+          style={{
+            padding: '0.8rem 1.5rem',
+            borderRadius: '10px',
+            border: 'none',
+            fontWeight: 'bold',
+            fontSize: '1rem',
+            cursor: 'pointer',
+            background: activePortal === 'elder' ? '#FF6600' : '#162A52',
+            color: '#FFFFFF',
+          }}
+        >
+          👵 Elder View
+        </button>
 
-  if (!medicineName) {
-    return res.status(400).json({ error: 'Medicine name is required for AI analysis.' });
-  }
+        <button
+          onClick={() => setActivePortal('caregiver')}
+          style={{
+            padding: '0.8rem 1.5rem',
+            borderRadius: '10px',
+            border: 'none',
+            fontWeight: 'bold',
+            fontSize: '1rem',
+            cursor: 'pointer',
+            background: activePortal === 'caregiver' ? '#FF6600' : '#162A52',
+            color: '#FFFFFF',
+          }}
+        >
+          👨‍👦 Caregiver Portal
+        </button>
+      </header>
 
-  try {
-    // Correct method call for the new SDK structure
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Provide a short, 2-sentence safe advisory tip for an undergraduate healthcare tracking app regarding the medicine: "${medicineName}". User note details: "${notes || 'None'}". Mention common standard precautions (e.g., take with food, avoid skipping, or standard timing notes). Disclaimer: Keep it educational.`,
-    });
+      {/* ELDER VIEW */}
+      {activePortal === 'elder' ? (
+        <main style={{ maxWidth: '800px', margin: '0 auto', background: '#162A52', padding: '2rem', borderRadius: '16px' }}>
+          <h1 style={{ color: '#FFCC00', margin: '0 0 1rem 0' }}>Today's Medicines</h1>
+          {medications.length === 0 ? (
+            <p>No medicines found from backend database.</p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0 }}>
+              {medications.map((med) => (
+                <li key={med.id} style={{ background: '#0B1B3D', margin: '0.8rem 0', padding: '1rem', borderRadius: '10px', border: '1px solid #1E3A70' }}>
+                  <strong style={{ fontSize: '1.2rem' }}>{med.name}</strong> - {med.schedule}
+                </li>
+              ))}
+            </ul>
+          )}
+        </main>
+      ) : (
+        /* CAREGIVER VIEW */
+        <main style={{ maxWidth: '800px', margin: '0 auto', background: '#162A52', padding: '2rem', borderRadius: '16px' }}>
+          <h1 style={{ color: '#FFCC00', margin: '0 0 1rem 0' }}>Caregiver Dashboard</h1>
+          <p>Medication inventory and logs connected directly to SQL database.</p>
+        </main>
+      )}
 
-    res.json({ 
-      success: true, 
-      advice: response.text 
-    });
-
-  } catch (error) {
-    console.error("AI Generation Error:", error);
-    res.status(500).json({ error: "Failed to generate AI tips. Verify your GEMINI_API_KEY inside your .env file." });
-  }
-});
-
-// Fallback route: Serves your index.html if someone types anything else
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`Backend processing portal listening over: http://localhost:${PORT}`);
-});
+    </div>
+  );
+}

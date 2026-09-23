@@ -1,13 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import Column, Integer, String
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from database import Base, engine, get_db
+from typing import List, Optional
 
-app = FastAPI()
+app = FastAPI(title="MediCare API")
 
-# Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,66 +13,145 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Table Schema
-class MedicationModel(Base):
-    __tablename__ = "medications"
+# Expanded In-Memory Database
+medications_db = [
+    {
+        "id": 1, 
+        "name": "Paracetamol 500mg", 
+        
+        "schedule": "After Breakfast (9:00 AM)", 
+        "status": "pending",
+        "stock": 15,
+        "instructions": "Take with food",
+        "missed_alert": False
+    },
+    {
+        "id": 2, 
+        "name": "Amoxicillin 500mg", 
+        "schedule": "After Lunch (2:00 PM)", 
+        "status": "taken",
+        "stock": 3,  # Low stock trigger
+        "instructions": "Take with full glass of water",
+        "missed_alert": False
+    }
+]
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    schedule = Column(String)
-    status = Column(String, default="pending")
+vitals_db = []
 
-# Create Database Tables automatically
-Base.metadata.create_all(bind=engine)
-
-# Pydantic Schemas for API Requests
-class MedicationCreate(BaseModel):
+# Data Models
+class MedicationItem(BaseModel):
     name: str
     schedule: str
+    stock: int = 30
+    instructions: str = "Take as directed"
 
-class MedicationResponse(BaseModel):
-    id: int
-    name: str
-    schedule: str
-    status: str
+class AgeCheckRequest(BaseModel):
+    medication_name: str
+    age: int
 
-    class Config:
-        from_attributes = True
+class VitalLog(BaseModel):
+    blood_pressure: str
+    blood_sugar: str
+    notes: str
 
-# --- API ENDPOINTS ---
+# --- Endpoints ---
 
-# 1. Get all medications from Database
-@app.get("/api/medications", response_model=list[MedicationResponse])
-def get_medications(db: Session = Depends(get_db)):
-    return db.query(MedicationModel).all()
+@app.get("/api/medications")
+def get_medications():
+    return medications_db
 
-# 2. Add new medication to Database
-@app.post("/api/medications", response_model=MedicationResponse)
-def add_medication(med: MedicationCreate, db: Session = Depends(get_db)):
-    db_med = MedicationModel(name=med.name, schedule=med.schedule, status="pending")
-    db.add(db_med)
-    db.commit()
-    db.refresh(db_med)
-    return db_med
+@app.post("/api/medications")
+def add_medication(item: MedicationItem):
+    new_id = max([m["id"] for m in medications_db], default=0) + 1
+    new_med = {
+        "id": new_id,
+        "name": item.name,
+        "schedule": item.schedule,
+        "stock": item.stock,
+        "instructions": item.instructions,
+        "status": "pending",
+        "missed_alert": False
+    }
+    medications_db.append(new_med)
+    return new_med
 
-# 3. Toggle medication status (Taken / Pending)
 @app.put("/api/medications/{med_id}/toggle")
-def toggle_medication(med_id: int, db: Session = Depends(get_db)):
-    db_med = db.query(MedicationModel).filter(MedicationModel.id == med_id).first()
-    if not db_med:
-        raise HTTPException(status_code=404, detail="Medication not found")
-    
-    db_med.status = "taken" if db_med.status == "pending" else "pending"
-    db.commit()
-    return db_med
+def toggle_medication(med_id: int):
+    for med in medications_db:
+        if med["id"] == med_id:
+            if med["status"] == "pending":
+                med["status"] = "taken"
+                med["stock"] = max(0, med["stock"] - 1)
+            else:
+                med["status"] = "pending"
+                med["stock"] += 1
+            return med
+    return {"error": "Medication not found"}
 
-# 4. Delete medication from Database
 @app.delete("/api/medications/{med_id}")
-def delete_medication(med_id: int, db: Session = Depends(get_db)):
-    db_med = db.query(MedicationModel).filter(MedicationModel.id == med_id).first()
-    if not db_med:
-        raise HTTPException(status_code=404, detail="Medication not found")
+def delete_medication(med_id: int):
+    global medications_db
+    medications_db = [m for m in medications_db if m["id"] != med_id]
+    return {"success": True}
+
+# Vitals Endpoint
+@app.get("/api/vitals")
+def get_vitals():
+    return vitals_db
+
+@app.post("/api/vitals")
+def log_vital(vital: VitalLog):
+    vitals_db.append(vital.dict())
+    return {"success": True, "vitals": vitals_db}
+
+# Age Check Endpoint
+@app.post("/api/check-age-safety")
+def check_age_safety(req: AgeCheckRequest):
+    med = req.medication_name.strip().lower()
+    age = req.age
     
-    db.delete(db_med)
-    db.commit()
-    return {"message": "Deleted successfully"}
+    if age < 12:
+        if "aspirin" in med:
+            return {
+                "safe": False,
+                "warning": "⚠️ High Risk: Aspirin is contraindicated for children under 12 due to Reye's Syndrome risk.",
+                "recommendation": "Consult a pediatrician before giving Aspirin."
+            }
+        if "ibuprofen" in med and age < 1:
+            return {
+                "safe": False,
+                "warning": "⚠️ Caution: Ibuprofen is generally not recommended for infants under 6 months.",
+                "recommendation": "Consult a doctor for pediatric dosing."
+            }
+
+    if age >= 65:
+        beers_list = ["benadryl", "diphenhydramine", "diazepam", "valium", "xanax", "alprazolam", "zolpidem", "indomethacin"]
+        if any(drug in med for drug in beers_list):
+            return {
+                "safe": False,
+                "warning": "⚠️ Caution (Beers Criteria Warning): Higher risk for adults aged 65 and older.",
+                "recommendation": "May cause dizziness or fall risks in seniors. Ask for safer alternatives."
+            }
+
+    return {
+        "safe": True,
+        "warning": f"✅ No major age-based contraindications flagged for age {age}.",
+        "recommendation": "Always follow prescribed dosage."
+    }
+
+# Drug Interaction Checker
+@app.get("/api/check-interactions")
+def check_interactions():
+    names = [m["name"].lower() for m in medications_db]
+    interactions = []
+    
+    has_aspirin = any("aspirin" in n for n in names)
+    has_ibuprofen = any("ibuprofen" in n for n in names)
+    has_warfarin = any("warfarin" in n or "blood thinner" in n for n in names)
+    
+    if has_aspirin and has_ibuprofen:
+        interactions.append("⚠️ Alert: Combining Aspirin and Ibuprofen may increase stomach bleeding risks.")
+    if (has_aspirin or has_ibuprofen) and has_warfarin:
+        interactions.append("⚠️ Critical Alert: Combining NSAIDs with Blood Thinners severely increases hemorrhage risks.")
+        
+    return {"interactions": interactions}
